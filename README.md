@@ -1,6 +1,6 @@
 # D2R XP Pulse
 
-Hands-free toy feedback for Diablo II: Resurrected. When the experience bar goes up, a connected vibrator pulses. A small XP tick is a short burst. A large tick is a longer, stronger burst.
+Hands-free toy feedback for Diablo II: Resurrected. When the experience bar goes up, a connected vibrator pulses. A small XP tick is a short burst. A large tick is a longer, stronger double-hit.
 
 You play. You do not press a key for each kill.
 
@@ -10,21 +10,21 @@ Diablo II: Resurrected pays experience when a monster dies in range. That includ
 
 This script watches that bar the same way a screen recorder does. It captures pixels. It does not attach to `D2R.exe`, does not read game memory, and does not inject.
 
+The fill is the right edge of the gold, not a raw pixel count, so a tiny tick still registers if it moves that edge. Three samples are median-filtered so one flicker does not fire.
+
 | XP change | What you feel |
 | --- | --- |
-| Small rise | Short pulse, about 45% for 0.22s |
-| Large rise | Spike, dip, then about 85% for 1.4s |
-| Bar resets (level-up) | Ignored |
+| Small rise | Short pulse, 45% for 0.22s |
+| Large rise | Spike, dip, then 85% for 1.4s |
+| Bar falls (level-up) | Ignored |
 
 A large rise is usually a unique, a champion pack, an act boss, or a quest reward. The script cannot read the monster's name. Size of the XP jump is the split.
 
 ## Why XP, not the monster
 
-Other signals were tried and are worse for hands-free play.
-
 - A hotkey works, and you cannot play while tapping it.
-- Death sounds fire on your own swings until you tune them, and they cannot tell a Fallen from Andariel reliably.
-- Life bars in vanilla D2R only draw on the monster you are hovering or targeting. An AoE clear does not show a bar per corpse.
+- Death sounds fire on your own swings until you tune them.
+- Life bars in vanilla D2R only draw on the monster you are hovering or targeting.
 - Reading process memory to get a real kill event is how Battle.net bans accounts. This repo does not do that.
 
 XP is the game telling you that something died and you got credit.
@@ -38,8 +38,8 @@ XP is the game telling you that something died and you got credit.
 ## What it will miss
 
 - Level 99. The bar never moves.
-- Spawns that pay no experience: Baal's appendages, some eggs, nests, and similar objects.
-- A late-game character killing very low monsters. One Fallen may not move a visible pixel. Lower `--min-delta`, or accept that those ticks are invisible to a screenshot.
+- Spawns that pay no experience.
+- A late-game character killing very low monsters, if the edge does not move a visible pixel. Lower `--min-delta` if trash stays silent.
 
 ## Requirements
 
@@ -54,65 +54,57 @@ pip install -r requirements.txt
 
 ## Run
 
-Start Intiface Central, start its server, and connect the toy there first. Confirm the toy buzzes inside Intiface before you launch the game.
+Start Intiface Central, start its server, and connect the toy. Confirm it buzzes there before you launch the game.
 
-Calibrate the crop. This writes `xp_crop.png` and does not touch the toy.
+First run finds the bar. Be in game, experience bar visible.
 
 ```bash
 python d2r_xp_pulse.py --calibrate
 ```
 
-The image should be the gold experience bar and almost nothing else. Then pass that rectangle as `x,y,width,height` in screen pixels. A 1920x1080 bottom-center guess:
+That writes `xp_crop.png` (gold line, green outline) and saves the crop to `xp_pulse.json`. Check the image. If it is the bar, play:
 
 ```bash
-python d2r_xp_pulse.py --crop 700,1040,500,12
+python d2r_xp_pulse.py
 ```
 
-Kill one Fallen. The console should print a small increase and `[kill] trash`. Kill a unique or an act boss and it should print `[kill] boss`.
+Wrong monitor: `--monitor 2`, then calibrate again.
 
-Lovense Game Mode instead of Intiface. Phone and PC on the same Wi-Fi. In the Lovense Remote app: Discover, Game Mode, Enable LAN. Use the HTTP port, usually 20010.
+Dry run, no toy:
 
 ```bash
-python d2r_xp_pulse.py --backend lovense --lovense-url http://192.168.1.40:20010 --crop 700,1040,500,12
+python d2r_xp_pulse.py --dry-run
 ```
 
-Wrong monitor:
+Lovense Game Mode. Phone and PC on the same Wi-Fi. Discover, Game Mode, Enable LAN. HTTP port, usually 20010.
 
 ```bash
-python d2r_xp_pulse.py --monitor 2 --crop 700,1040,500,12
+python d2r_xp_pulse.py --backend lovense --lovense-url http://192.168.1.40:20010
 ```
 
 ## Keys
 
 | Key | Action |
 | --- | --- |
+| F9 | Play both patterns so you can feel the difference |
 | F10 | Motors off. Listening continues. |
 | Esc | Quit |
-
-No key is required to play.
 
 ## Tuning
 
 ```bash
-python d2r_xp_pulse.py --crop 700,1040,500,12 --min-delta 0.001 --boss-delta 0.02 --boss-strength 0.7
+python d2r_xp_pulse.py --min-delta 0.002 --boss-delta 0.02 --boss-strength 0.7
 ```
 
-- `--min-delta` is the smallest fill increase that counts. Lower it if trash kills are silent.
-- `--boss-delta` is the increase that switches to the long pattern. Lower it if uniques feel like trash.
-- `--trash-strength` / `--trash-seconds` and `--boss-strength` / `--boss-seconds` shape the two patterns.
-- If the toy is a plug, start `--boss-strength` at `0.65`. Full strength internally is a lot.
-- `--cooldown` is the minimum gap between trash pulses, so a dense pack ticks instead of holding the motor open.
+- `--min-delta` is the smallest edge move that counts.
+- `--boss-delta` is the move that switches to the long pattern.
+- If the toy is a plug, start `--boss-strength` at `0.65`.
+
+`xp_pulse.json` and `xp_crop.png` are local. They are gitignored.
 
 ## Battle.net
 
-Screenshot capture is the same class of tool as OBS. It is not a memory reader. Blizzard's end-user license still applies to anything you run alongside the game. Do not add a process reader, an injector, or offset scanning to this and then take it online. That path gets accounts banned.
-
-Single-player mods that draw always-on health bars are a separate install. This script does not need them.
-
-## Layout
-
-- `d2r_xp_pulse.py` — the tool. Experience bar in, pulse out.
-- `requirements.txt` — Python dependencies.
+Screenshot capture is the same class of tool as OBS. It is not a memory reader. Blizzard's end-user license still applies to anything you run alongside the game. Do not add a process reader or an injector and take it online.
 
 ## License
 

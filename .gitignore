@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+xp_pulse.json
+xp_crop.png
