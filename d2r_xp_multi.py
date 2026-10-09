@@ -1,8 +1,9 @@
-"""Easy multi-toy orchestra for D2R XP Pulse.
+"""Easy multi-toy orchestra for D2R XP Pulse, with a controlled stroker.
 
-Scan once. Toys are assigned parts automatically: lead, pulse, sustain.
-They do not all buzz the same way. A kill is a short phrase.
+Vibrators take lead, pulse, and sustain. A linear device takes the stroker part.
+Trash is one short stroke. A boss is two. A level-up is three. Depth is capped.
 
+Connect the stroker in Intiface Central so it exposes LinearCmd.
 python d2r_xp_multi.py
 """
 
@@ -56,7 +57,7 @@ class Intiface:
         self.url = url
         self.ws = None
         self.msg_id = 1
-        self.devices: dict[int, str] = {}
+        self.devices: dict[int, dict] = {}
 
     def next_id(self) -> int:
         self.msg_id += 1
@@ -75,15 +76,25 @@ class Intiface:
             for msg in json.loads(raw):
                 if "DeviceList" in msg:
                     for dev in msg["DeviceList"].get("Devices", []):
-                        self.devices[int(dev["DeviceIndex"])] = dev.get("DeviceName", "toy")
+                        self._remember(dev)
                 if "DeviceAdded" in msg:
-                    dev = msg["DeviceAdded"]
-                    self.devices[int(dev["DeviceIndex"])] = dev.get("DeviceName", "toy")
+                    self._remember(msg["DeviceAdded"])
         except asyncio.TimeoutError:
             pass
 
+    def _remember(self, dev: dict) -> None:
+        msgs = dev.get("DeviceMessages", {})
+        self.devices[int(dev["DeviceIndex"])] = {
+            "name": dev.get("DeviceName", "toy"),
+            "linear": "LinearCmd" in msgs,
+        }
+
     async def set_one(self, idx: int, strength: float) -> None:
         body = {"ScalarCmd": {"Id": self.next_id(), "DeviceIndex": idx, "Scalars": [{"Index": 0, "Scalar": max(0.0, min(1.0, strength)), "ActuatorType": "Vibrate"}]}}
+        await self.ws.send(json.dumps([body]))
+
+    async def stroke(self, idx: int, position: float, duration_ms: int) -> None:
+        body = {"LinearCmd": {"Id": self.next_id(), "DeviceIndex": idx, "Vectors": [{"Index": 0, "Duration": int(duration_ms), "Position": max(0.0, min(1.0, position))}]}}
         await self.ws.send(json.dumps([body]))
 
     async def stop(self, indexes: list[int]) -> None:
@@ -101,12 +112,22 @@ def lovense(url: str, strength: float) -> None:
 
 
 def phrase(kind: str) -> list[tuple[str, float, float, float]]:
-    """part, delay, strength, hold."""
     if kind == "level":
         return [("lead", 0.0, 0.7, 0.4), ("pulse", 0.15, 0.55, 0.35), ("sustain", 0.0, 0.4, 1.4)]
     if kind == "boss":
         return [("lead", 0.0, 0.62, 0.25), ("pulse", 0.18, 0.5, 0.2), ("lead", 0.4, 0.7, 0.45), ("sustain", 0.0, 0.35, 1.1)]
     return [("lead", 0.0, 0.4, 0.16), ("pulse", 0.12, 0.28, 0.12)]
+
+
+def stroke_plan(kind: str, depth: float) -> list[tuple[float, int]]:
+    depth = max(0.2, min(1.0, depth))
+    low = 0.5 - depth * 0.35
+    high = 0.5 + depth * 0.35
+    if kind == "level":
+        return [(high, 500), (low, 500), (high, 600)]
+    if kind == "boss":
+        return [(high, 450), (low, 450)]
+    return [(0.5 + depth * 0.2, 280)]
 
 
 class App:
@@ -115,13 +136,14 @@ class App:
         self.root = tk.Tk()
         self.root.title("D2R orchestra")
         self.root.configure(bg="#141414")
-        self.root.geometry("460x620")
+        self.root.geometry("480x680")
         self.link = None
         self.parts: dict[str, str] = {}
         self.running = False
         self.intiface = tk.StringVar(value=cfg.get("intiface", "ws://127.0.0.1:12345"))
         self.lovense = tk.StringVar(value=cfg.get("lovense", ""))
         self.dry = tk.BooleanVar(value=True)
+        self.depth = tk.DoubleVar(value=float(cfg.get("stroke_depth", 0.55)))
         self.crop = cfg.get("crop") or {"left": 700, "top": 1040, "width": 500, "height": 12}
         self.status = tk.StringVar(value="1. Connect toys in Intiface.  2. Find toys.  3. Hear the phrase.  4. Start.")
         self._build()
@@ -132,14 +154,16 @@ class App:
         style.configure("TLabel", background="#141414", foreground="#eee")
         style.configure("TCheckbutton", background="#141414", foreground="#eee")
         ttk.Label(self.root, text="Orchestra", font=("Segoe UI", 18)).pack(anchor="w", padx=12, pady=8)
-        ttk.Label(self.root, textvariable=self.status, wraplength=420).pack(anchor="w", padx=12)
-        ttk.Label(self.root, text="Lead hits the beat. Pulse answers. Sustain holds under bosses.").pack(anchor="w", padx=12, pady=4)
+        ttk.Label(self.root, textvariable=self.status, wraplength=440).pack(anchor="w", padx=12)
+        ttk.Label(self.root, text="Lead hits the beat. Pulse answers. A stroker moves on its own part.", wraplength=440).pack(anchor="w", padx=12, pady=4)
         ttk.Button(self.root, text="Find my toys", command=self.scan).pack(anchor="w", padx=12, pady=6)
         self.list = ttk.Frame(self.root)
         self.list.pack(fill="x", padx=12, pady=4)
-        ttk.Label(self.root, text="Lovense URL, optional. It takes the next open part.").pack(anchor="w", padx=12)
+        ttk.Label(self.root, text="Stroke depth. 0.5 is a short controlled move. 1 is the full throw.").pack(anchor="w", padx=12)
+        ttk.Scale(self.root, from_=0.25, to=1, variable=self.depth).pack(fill="x", padx=12)
+        ttk.Label(self.root, text="Lovense URL, optional. It takes the next open vibrator part.").pack(anchor="w", padx=12)
         ttk.Entry(self.root, textvariable=self.lovense).pack(fill="x", padx=12, pady=2)
-        ttk.Checkbutton(self.root, text="Dry run (no buzz until you uncheck)", variable=self.dry).pack(anchor="w", padx=12, pady=6)
+        ttk.Checkbutton(self.root, text="Dry run (no motion until you uncheck)", variable=self.dry).pack(anchor="w", padx=12, pady=6)
         row = ttk.Frame(self.root)
         row.pack(fill="x", padx=12)
         ttk.Button(row, text="Hear the phrase", command=self.test).pack(side="left", padx=2)
@@ -168,33 +192,51 @@ class App:
 
         threading.Thread(target=go, daemon=True).start()
 
-    def assign(self, devices: dict[int, str]) -> None:
+    def assign(self, devices: dict[int, dict]) -> None:
         for child in self.list.winfo_children():
             child.destroy()
         self.parts = {}
-        names = list(devices.items())
-        if self.lovense.get().strip():
-            names.append(("lovense", "Lovense"))
-        if not names:
+        vibe_i = 0
+        if not devices and not self.lovense.get().strip():
             ttk.Label(self.list, text="No toys yet. Connect one in Intiface and press Find my toys again.").pack(anchor="w")
             return
-        for i, (idx, name) in enumerate(names):
-            part = PARTS[i % 3]
+        for idx, dev in devices.items():
+            if dev["linear"]:
+                part = "stroker"
+            else:
+                part = PARTS[vibe_i % 3]
+                vibe_i += 1
             self.parts[str(idx)] = part
-            ttk.Label(self.list, text="%s  ->  %s" % (name, part)).pack(anchor="w", pady=2)
-        self.log("Assigned %d toys. Hear the phrase, then Start." % len(names))
+            ttk.Label(self.list, text="%s  ->  %s" % (dev["name"], part)).pack(anchor="w", pady=2)
+        if self.lovense.get().strip():
+            part = PARTS[vibe_i % 3]
+            self.parts["lovense"] = part
+            ttk.Label(self.list, text="Lovense  ->  %s" % part).pack(anchor="w", pady=2)
+        self.log("Assigned %d toys. A linear device is the stroker." % len(self.parts))
 
     def indexes(self, part: str) -> list[int]:
         return [int(idx) for idx, owned in self.parts.items() if owned == part and idx != "lovense"]
 
     def play(self, kind: str) -> None:
         notes = phrase(kind)
-        self.log("%s phrase" % kind)
+        strokes = stroke_plan(kind, self.depth.get())
+        self.log("%s phrase, stroker depth %.2f" % (kind, self.depth.get()))
         if self.dry.get():
             return
 
         async def go() -> None:
             used: list[int] = []
+            stroker_ids = self.indexes("stroker")
+
+            async def move_stroker() -> None:
+                for position, duration in strokes:
+                    for idx in stroker_ids:
+                        await self.link.stroke(idx, position, duration)
+                    await asyncio.sleep(duration / 1000)
+                if self.link:
+                    await self.link.stop(stroker_ids)
+
+            stroker_task = asyncio.create_task(move_stroker()) if self.link and stroker_ids else None
             for part, delay, strength, hold in notes:
                 if delay:
                     await asyncio.sleep(delay)
@@ -210,14 +252,16 @@ class App:
                     await self.link.stop(ids)
                 if self.parts.get("lovense") == part:
                     await asyncio.to_thread(lovense, self.lovense.get().strip(), 0)
+            if stroker_task:
+                await stroker_task
             if self.link:
-                await self.link.stop(list(set(used)))
+                await self.link.stop(list(set(used + stroker_ids)))
 
         threading.Thread(target=lambda: asyncio.run(go()), daemon=True).start()
 
     def test(self) -> None:
-        if not self.parts:
-            self.assign(self.link.devices if self.link else {})
+        if not self.parts and self.link:
+            self.assign(self.link.devices)
         self.play("boss")
 
     def start(self) -> None:
@@ -232,6 +276,13 @@ class App:
 
     def stop(self) -> None:
         self.running = False
+        if self.link:
+            ids = [int(i) for i in self.parts if i != "lovense"]
+
+            def go() -> None:
+                asyncio.run(self.link.stop(ids))
+
+            threading.Thread(target=go, daemon=True).start()
         self.log("Stopped")
 
     def watch(self) -> None:
